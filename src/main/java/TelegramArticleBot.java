@@ -18,7 +18,7 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private static final String BOT_TOKEN       = "7674387942:AAFBJ0KGEBqG-uXFuRQyzm7E9-tswWX-kq4";
     private static final String BOT_USERNAME    = "SeoCreatorBot";
     private static final String N8N_WEBHOOK_URL = "https://vaierii21061.app.n8n.cloud/webhook/4b2dae6e-801a-49b8-8839-2c9c8f73f098";
-    private static final String CHANNEL_ID      = "@testseo_mirai";
+    private static final String CHANNEL_ID      = "@mirAl_iielvani";
     // =======================================
 
     private enum ChannelType { TG, SITE }
