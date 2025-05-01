@@ -55,6 +55,19 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             .readTimeout(java.time.Duration.ofMinutes(2))
             .build();
 
+    // Persistent reply keyboard
+    private final ReplyKeyboardMarkup mainMenuKeyboard;
+    {
+        mainMenuKeyboard = new ReplyKeyboardMarkup();
+        mainMenuKeyboard.setResizeKeyboard(true);
+        mainMenuKeyboard.setOneTimeKeyboard(false);
+        KeyboardRow row = new KeyboardRow();
+        row.add(new KeyboardButton("Главное меню"));
+        List<KeyboardRow> rows = new ArrayList<>();
+        rows.add(row);
+        mainMenuKeyboard.setKeyboard(rows);
+    }
+
     private void resetUserState(long chatId) {
         states.remove(chatId);
         lastResults.remove(chatId);
@@ -63,10 +76,10 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update upd) {
-        if (upd.hasMessage() && upd.getMessage().hasText() && upd.getMessage().getText().equals("/start")) {
+        if (upd.hasMessage() && upd.getMessage().hasText() && "/start".equals(upd.getMessage().getText())) {
             long chatId = upd.getMessage().getChatId();
             resetUserState(chatId);
-            sendWelcome(chatId);
+            sendPlatformChoice(chatId);
             return;
         }
 
@@ -89,93 +102,78 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         UserState st = states.get(chat);
         ArticleResult ar = lastResults.get(chat);
 
-        if ("VIEW".equals(data)) {
-            if (ar != null && ar.zenDocumentId != null) {
-                String url = GOOGLE_DOCS_URL_PREFIX + ar.zenDocumentId;
-                InlineKeyboardButton back = new InlineKeyboardButton("🔙 Назад");
-                back.setCallbackData("BACK");
-                InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
-                        Collections.singletonList(Collections.singletonList(back))
-                );
-                sendMessage(chat, "🔗 Ссылка на статью в Google Docs: " + url, kb);
-            }
-            return;
-        }
-
-        if ("BACK".equals(data)) {
-            execute(new DeleteMessage(String.valueOf(chat), msgId));
-            if (ar != null) {
-                if (ar.zenDocumentId != null) {
-                    sendZenArticleButtons(chat, ar);
-                } else {
-                    sendArticleWithButtons(chat, ar);
+        switch (data) {
+            case "VIEW":
+                if (ar != null && ar.zenDocumentId != null) {
+                    String url = GOOGLE_DOCS_URL_PREFIX + ar.zenDocumentId;
+                    InlineKeyboardButton back = new InlineKeyboardButton("🔙 Назад");
+                    back.setCallbackData("BACK");
+                    InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
+                            Collections.singletonList(Collections.singletonList(back))
+                    );
+                    sendMessage(chat, "🔗 Ссылка на статью в Google Docs: " + url, kb);
                 }
-            }
-            return;
-        }
+                return;
 
-        if ("MAIN_MENU".equals(data)) {
-            execute(new DeleteMessage(String.valueOf(chat), msgId));
-            resetUserState(chat);
-            sendPlatformChoice(chat);
-            return;
-        }
-
-        execute(new DeleteMessage(String.valueOf(chat), msgId));
-
-        if ("PUBLISH".equals(data)) {
-            if (ar != null) {
-                if (ar.zenDocumentId != null) {
-                    sendToDzen(ar.zenDocumentId);
-                } else {
-                    sendToChannel(ar.text, ar.picture);
+            case "BACK":
+                execute(new DeleteMessage(String.valueOf(chat), msgId));
+                if (ar != null) {
+                    if (ar.zenDocumentId != null) sendZenArticleButtons(chat, ar);
+                    else sendArticleWithButtons(chat, ar);
                 }
-                sendText(chat, "✅ Опубликовано!");
-            }
-            resetUserState(chat);
-            sendPlatformChoice(chat);
-            return;
-        }
+                return;
 
-        if ("REREWRITE".equals(data)) {
-            if (ar == null) {
-                sendText(chat, "❌ Сначала сгенерируйте статью.");
+            case "MAIN_MENU":
+                execute(new DeleteMessage(String.valueOf(chat), msgId));
+                resetUserState(chat);
                 sendPlatformChoice(chat);
                 return;
-            }
-            UserState newState = new UserState();
-            newState.channel = (ar.zenDocumentId != null) ? ChannelType.SITE : ChannelType.TG;
-            newState.action = ActionType.REWRITE;
-            newState.awaitingFeedback = true;
-            newState.originalText = (ar.zenDocumentId != null)
-                    ? ar.zenDocumentId
-                    : (ar.text != null ? ar.text : "");
-            states.put(chat, newState);
-            sendText(chat, "✏️ Что нужно изменить в статье?");
-            return;
-        }
 
-        if (data.startsWith("CH_")) {
-            UserState newState = new UserState();
-            newState.channel = data.equals("CH_TG") ? ChannelType.TG : ChannelType.SITE;
-            states.put(chat, newState);
-            sendActionMenu(chat, newState.channel);
-            return;
-        }
-
-        if (data.startsWith("ACT_")) {
-            if (st == null) {
-                sendText(chat, "❌ Ошибка состояния. Попробуйте заново.");
+            case "PUBLISH":
+                if (ar != null) {
+                    if (ar.zenDocumentId != null) sendToDzen(ar.zenDocumentId);
+                    else sendToChannel(ar.text, ar.picture);
+                    sendText(chat, "✅ Опубликовано!");
+                }
+                resetUserState(chat);
                 sendPlatformChoice(chat);
                 return;
-            }
-            st.action = data.equals("ACT_GEN") ? ActionType.GENERATE : ActionType.REWRITE;
-            if (st.action == ActionType.GENERATE) {
-                sendText(chat, "📝 Введите тему статьи:");
-            } else {
-                st.awaitingOriginal = true;
-                sendText(chat, "🔄 Пришлите статью для рерайта:");
-            }
+
+            case "REREWRITE":
+                if (ar == null) {
+                    sendText(chat, "❌ Сначала сгенерируйте статью.");
+                    sendPlatformChoice(chat);
+                    return;
+                }
+                UserState newState = new UserState();
+                newState.channel = (ar.zenDocumentId != null) ? ChannelType.SITE : ChannelType.TG;
+                newState.action = ActionType.REWRITE;
+                newState.awaitingFeedback = true;
+                newState.originalText = (ar.zenDocumentId != null) ? ar.zenDocumentId : (ar.text != null ? ar.text : "");
+                states.put(chat, newState);
+                sendText(chat, "✏️ Что нужно изменить в статье?");
+                return;
+
+            default:
+                if (data.startsWith("CH_")) {
+                    UserState s = new UserState();
+                    s.channel = "CH_TG".equals(data) ? ChannelType.TG : ChannelType.SITE;
+                    states.put(chat, s);
+                    sendActionMenu(chat, s.channel);
+                } else if (data.startsWith("ACT_")) {
+                    if (st == null) {
+                        sendText(chat, "❌ Ошибка состояния. Попробуйте заново.");
+                        sendPlatformChoice(chat);
+                        return;
+                    }
+                    st.action = "ACT_GEN".equals(data) ? ActionType.GENERATE : ActionType.REWRITE;
+                    if (st.action == ActionType.GENERATE) {
+                        sendText(chat, "📝 Введите тему статьи:");
+                    } else {
+                        st.awaitingOriginal = true;
+                        sendText(chat, "🔄 Пришлите статью для рерайта:");
+                    }
+                }
         }
     }
 
@@ -184,22 +182,20 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         String txt = msg.getText();
         UserState st = states.get(chat);
 
-        if (txt.equalsIgnoreCase("Главное меню")) {
+        if ("Главное меню".equalsIgnoreCase(txt)) {
             resetUserState(chat);
             sendPlatformChoice(chat);
             return;
         }
-
         if (st == null) {
             if (!greeted.contains(chat)) {
-                sendWelcome(chat);
+                sendPlatformChoice(chat);
                 greeted.add(chat);
             } else {
                 sendPlatformChoice(chat);
             }
             return;
         }
-
         if (st.awaitingOriginal) {
             st.originalText = txt;
             st.awaitingOriginal = false;
@@ -207,7 +203,6 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             sendText(chat, "✏️ Укажите, что изменить:");
             return;
         }
-
         if (st.awaitingFeedback) {
             sendText(chat, "⏳ Переписываю...");
             ArticleResult ar = callRewrite(chat, st.originalText, txt);
@@ -216,16 +211,12 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
                 sendPlatformChoice(chat);
             } else {
                 lastResults.put(chat, ar);
-                if (ar.zenDocumentId != null) {
-                    sendZenArticleButtons(chat, ar);
-                } else {
-                    sendArticleWithButtons(chat, ar);
-                }
+                if (ar.zenDocumentId != null) sendZenArticleButtons(chat, ar);
+                else sendArticleWithButtons(chat, ar);
             }
             states.remove(chat);
             return;
         }
-
         if (st.action == ActionType.GENERATE) {
             if (st.topic == null) {
                 st.topic = txt;
@@ -241,18 +232,11 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
                     sendPlatformChoice(chat);
                 } else {
                     lastResults.put(chat, ar);
-                    if (ar.zenDocumentId != null) {
-                        sendZenArticleButtons(chat, ar);
-                    } else {
-                        sendArticleWithButtons(chat, ar);
-                    }
+                    if (ar.zenDocumentId != null) sendZenArticleButtons(chat, ar);
+                    else sendArticleWithButtons(chat, ar);
                 }
             }
         }
-    }
-
-    private void sendWelcome(long chat) {
-        sendPlatformChoice(chat);
     }
 
     private void sendPlatformChoice(long chat) {
@@ -289,11 +273,13 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         re.setCallbackData("REREWRITE");
         InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить");
         pu.setCallbackData("PUBLISH");
-
+        InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню");
+        menu.setCallbackData("MAIN_MENU");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(re),
-                        Collections.singletonList(pu)
+                        Collections.singletonList(pu),
+                        Collections.singletonList(menu)
                 )
         );
         if (ar.picture != null && !ar.picture.isEmpty()) {
@@ -304,9 +290,7 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             ph.setCaption(full.length() <= 1024 ? full : full.substring(0, 1024));
             ph.setReplyMarkup(kb);
             safeSend(ph);
-            if (full.length() > 1024) {
-                sendText(chat, full.substring(1024));
-            }
+            if (full.length() > 1024) sendText(chat, full.substring(1024));
         } else {
             SendMessage m = new SendMessage(String.valueOf(chat), ar.text);
             m.setReplyMarkup(kb);
@@ -317,20 +301,14 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private void sendZenArticleButtons(long chat, ArticleResult ar) {
         InlineKeyboardButton view = new InlineKeyboardButton("👀 Посмотреть");
         view.setUrl(GOOGLE_DOCS_URL_PREFIX + ar.zenDocumentId);
-
-        InlineKeyboardButton re = new InlineKeyboardButton("✍️ Переписать");
-        re.setCallbackData("REREWRITE");
-
-//        InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить");
-//        pu.setCallbackData("PUBLISH");
-
-
-
+        InlineKeyboardButton re = new InlineKeyboardButton("✍️ Переписать"); re.setCallbackData("REREWRITE");
+//        InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить"); pu.setCallbackData("PUBLISH");
+//        InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню"); menu.setCallbackData("MAIN_MENU");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(view),
-                        Collections.singletonList(re)
-//                        Arrays.asList(re, pu)
+                        Arrays.asList(re)
+//                        Collections.singletonList(menu)
                 )
         );
         sendMessage(chat, "✅ Статья готова! Вы можете:", kb);
@@ -354,36 +332,28 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             sendPlatformChoice(chat);
             return null;
         }
-        ChannelType channel = st.channel;
-
         String payload = String.format(Locale.ROOT,
                 "{\"chat_id\":%d,\"channel\":\"%s\",\"action\":\"rewrite\"," +
                         "\"original\":\"%s\",\"feedback\":\"%s\"}",
-                chat,
-                channel.name().toLowerCase(),
-                escape(orig),
-                escape(fb)
+                chat, st.channel.name().toLowerCase(),
+                escape(orig), escape(fb)
         );
-        return callN8n(payload, channel);
+        return callN8n(payload, st.channel);
     }
 
     private ArticleResult callN8n(String payload, ChannelType channel) {
         System.out.println("→ n8n payload: " + payload);
-        RequestBody body = RequestBody.create(
-                payload, MediaType.parse("application/json; charset=utf-8"));
+        RequestBody body = RequestBody.create(payload, MediaType.parse("application/json; charset=utf-8"));
         Request req = new Request.Builder().url(N8N_WEBHOOK_URL).post(body).build();
         try (Response resp = http.newCall(req).execute()) {
             String s = resp.body() != null ? resp.body().string() : null;
             System.out.println("← n8n response: " + s);
             if (!resp.isSuccessful() || s == null) return null;
-
             if (channel == ChannelType.SITE) {
-                JSONArray jsonArray = new JSONArray(s);
-                if (jsonArray.length() > 0) {
-                    JSONObject j = jsonArray.getJSONObject(0);
-                    if (j.has("documentId")) {
-                        return new ArticleResult(j.getString("documentId"));
-                    }
+                JSONArray arr = new JSONArray(s);
+                if (arr.length() > 0) {
+                    JSONObject j = arr.getJSONObject(0);
+                    if (j.has("documentId")) return new ArticleResult(j.getString("documentId"));
                 }
                 return null;
             } else {
@@ -412,12 +382,8 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         JSONObject payload = new JSONObject();
         payload.put("action", "publish");
         payload.put("documentId", documentId);
-
-        RequestBody body = RequestBody.create(
-                payload.toString(), MediaType.parse("application/json; charset=utf-8"));
-        Request req = new Request.Builder()
-                .url(N8N_WEBHOOK_URL + "zen-publish")
-                .post(body).build();
+        RequestBody body = RequestBody.create(payload.toString(), MediaType.parse("application/json; charset=utf-8"));
+        Request req = new Request.Builder().url(N8N_WEBHOOK_URL + "zen-publish").post(body).build();
         try (Response resp = http.newCall(req).execute()) {
             System.out.println("→ Zen publish response: " + (resp.body() != null ? resp.body().string() : "null"));
         } catch (IOException e) {
@@ -426,35 +392,35 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     }
 
     private static String escape(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
     }
 
-    private void sendText(long chat, String t) {
-        executeSilently(new SendMessage(String.valueOf(chat), t));
+    // All plain-text replies use this to include the persistent reply-button keyboard
+    private void sendText(long chat, String text) {
+        SendMessage m = new SendMessage(String.valueOf(chat), text);
+        m.setReplyMarkup(mainMenuKeyboard);
+        executeSilently(m);
     }
 
-    private void sendMessage(long chat, String t, InlineKeyboardMarkup kb) {
-        SendMessage m = new SendMessage(String.valueOf(chat), t);
-        m.setReplyMarkup(kb);
+    private void sendMessage(long chat, String text, InlineKeyboardMarkup inlineKb) {
+        SendMessage m = new SendMessage(String.valueOf(chat), text);
+        m.setReplyMarkup(inlineKb);
         executeSilently(m);
     }
 
     private void executeSilently(SendMessage m) {
-        try { execute(m); } catch (Exception e) { e.printStackTrace(); }
+        try { execute(m); } catch (Exception ignore) {}
     }
 
     private void safeSend(SendPhoto p) {
-        try { execute(p); } catch (Exception e) { e.printStackTrace(); }
+        try { execute(p); } catch (Exception ignore) {}
     }
 
     @Override public String getBotUsername() { return BOT_USERNAME; }
     @Override public String getBotToken() { return BOT_TOKEN; }
 
     public static void main(String[] args) throws Exception {
-        new TelegramBotsApi(DefaultBotSession.class)
-                .registerBot(new TelegramArticleBot());
+        new TelegramBotsApi(DefaultBotSession.class).registerBot(new TelegramArticleBot());
         System.out.println("Bot started");
     }
 }
