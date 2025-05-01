@@ -86,6 +86,12 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         if (upd.hasCallbackQuery()) {
             try {
                 handleCallback(upd.getCallbackQuery());
+                // Удаляем сообщение с inline-кнопкой после обработки
+                DeleteMessage deleteMessage = new DeleteMessage(
+                        String.valueOf(upd.getCallbackQuery().getMessage().getChatId()),
+                        upd.getCallbackQuery().getMessage().getMessageId()
+                );
+                executeSilently(deleteMessage);
             } catch(Exception e) {
                 e.printStackTrace();
                 sendPlatformChoice(upd.getCallbackQuery().getMessage().getChatId());
@@ -409,6 +415,10 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     }
 
     private void executeSilently(SendMessage m) {
+        try { execute(m); } catch (Exception ignore) {}
+    }
+
+    private void executeSilently(DeleteMessage m) {
         try { execute(m); } catch (Exception ignore) {}
     }
 
