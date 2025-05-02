@@ -19,11 +19,10 @@ import java.util.*;
 
 public class TelegramArticleBot extends TelegramLongPollingBot {
     // =============== CONFIG ================
-    private static final String BOT_TOKEN       = "7674387942:AAFBJ0KGEBqG-uXFuRQyzm7E9-tswWX-kq4";
-    private static final String BOT_USERNAME    = "SeoCreatorBot";
-    private static final String N8N_WEBHOOK_URL = "https://vaierii21061.app.n8n.cloud/webhook/4b2dae6e-801a-49b8-8839-2c9c8f73f098";
-    private static final String CHANNEL_ID      = "@mirAl_iielvani";
-    private static final String GOOGLE_DOCS_URL_PREFIX = "https://docs.google.com/document/d/";
+   private static final String BOT_TOKEN = System.getenv("BOT_TOKEN");
+private static final String BOT_USERNAME = System.getenv("BOT_USERNAME");
+private static final String N8N_WEBHOOK_URL = System.getenv("N8N_WEBHOOK_URL");
+private static final String CHANNEL_ID = System.getenv("CHANNEL_ID");
     // =======================================
 
     private enum ChannelType { TG, SITE }
