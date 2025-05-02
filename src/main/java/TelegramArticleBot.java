@@ -279,13 +279,13 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         re.setCallbackData("REREWRITE");
         InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить");
         pu.setCallbackData("PUBLISH");
-        InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню");
-        menu.setCallbackData("MAIN_MENU");
+        // InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню");
+        // menu.setCallbackData("MAIN_MENU");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(re),
-                        Collections.singletonList(pu),
-                        Collections.singletonList(menu)
+                        Collections.singletonList(pu)
+                        // Collections.singletonList(menu)
                 )
         );
         if (ar.picture != null && !ar.picture.isEmpty()) {
