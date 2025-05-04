@@ -275,7 +275,7 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         gen.setCallbackData("ACT_GEN");
         InlineKeyboardButton rew = new InlineKeyboardButton("✍️ Переписать");
         rew.setCallbackData("ACT_REWRITE");
-        String where = (ch == ChannelType.TG) ? "Telegram" : "Дзен";
+        String where = (ch == ChannelType.TG) ? "Telegram" : "Сайт";
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(gen),
