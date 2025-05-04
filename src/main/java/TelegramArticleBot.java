@@ -15,6 +15,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.*;
 
 public class TelegramArticleBot extends TelegramLongPollingBot {
@@ -24,6 +25,8 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private static final String N8N_WEBHOOK_URL = System.getenv("N8N_WEBHOOK_URL");
     private static final String CHANNEL_ID = System.getenv("CHANNEL_ID");
     private static final String GOOGLE_DOCS_URL_PREFIX = "https://docs.google.com/document/d/";
+    private static final String BASEROW_API_URL = System.getenv("BASEROW_API_URL");
+    private static final String BASEROW_TOKEN = System.getenv("BASEROW_TOKEN");
     // =======================================
 
     private enum ChannelType { TG, SITE }
@@ -135,11 +138,19 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
                 sendPlatformChoice(chat);
                 return;
 
-            case "PUBLISH":
-                if (ar != null) {
-                    if (ar.zenDocumentId != null) sendToDzen(ar.zenDocumentId);
-                    else sendToChannel(ar.text, ar.picture);
-                    sendText(chat, "✅ Опубликовано!");
+            case "PUBLISH_TG":
+                if (ar != null && ar.text != null) {
+                    sendToChannel(ar.text, ar.picture);
+                    sendText(chat, "✅ Опубликовано в Telegram канал!");
+                }
+                resetUserState(chat);
+                sendPlatformChoice(chat);
+                return;
+
+            case "PUBLISH_ZEN":
+                if (ar != null && ar.text != null && ar.zenDocumentId != null) {
+                    saveToBaserow(ar.text, ar.picture);
+                    sendText(chat, "✅ Опубликовано на сайт!");
                 }
                 resetUserState(chat);
                 sendPlatformChoice(chat);
@@ -248,7 +259,7 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private void sendPlatformChoice(long chat) {
         InlineKeyboardButton tg = new InlineKeyboardButton("📱 Telegram");
         tg.setCallbackData("CH_TG");
-        InlineKeyboardButton dz = new InlineKeyboardButton("🌐 Дзен");
+        InlineKeyboardButton dz = new InlineKeyboardButton("🌐 Сайт");
         dz.setCallbackData("CH_SITE");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
@@ -278,14 +289,11 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         InlineKeyboardButton re = new InlineKeyboardButton("✍️ Переписать");
         re.setCallbackData("REREWRITE");
         InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить");
-        pu.setCallbackData("PUBLISH");
-        // InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню");
-        // menu.setCallbackData("MAIN_MENU");
+        pu.setCallbackData("PUBLISH_TG");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(re),
                         Collections.singletonList(pu)
-                        // Collections.singletonList(menu)
                 )
         );
         if (ar.picture != null && !ar.picture.isEmpty()) {
@@ -307,14 +315,14 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private void sendZenArticleButtons(long chat, ArticleResult ar) {
         InlineKeyboardButton view = new InlineKeyboardButton("👀 Посмотреть");
         view.setUrl(GOOGLE_DOCS_URL_PREFIX + ar.zenDocumentId);
-        InlineKeyboardButton re = new InlineKeyboardButton("✍️ Переписать"); re.setCallbackData("REREWRITE");
-//        InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить"); pu.setCallbackData("PUBLISH");
-//        InlineKeyboardButton menu = new InlineKeyboardButton("Главное меню"); menu.setCallbackData("MAIN_MENU");
+        InlineKeyboardButton re = new InlineKeyboardButton("✍️ Переписать");
+        re.setCallbackData("REREWRITE");
+        InlineKeyboardButton pu = new InlineKeyboardButton("🚀 Запостить");
+        pu.setCallbackData("PUBLISH_ZEN");
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(view),
-                        Arrays.asList(re)
-//                        Collections.singletonList(menu)
+                        Arrays.asList(re, pu)
                 )
         );
         sendMessage(chat, "✅ Статья готова! Вы можете:", kb);
@@ -355,17 +363,37 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             String s = resp.body() != null ? resp.body().string() : null;
             System.out.println("← n8n response: " + s);
             if (!resp.isSuccessful() || s == null) return null;
-            if (channel == ChannelType.SITE) {
+
+            // Проверяем, является ли ответ массивом или объектом
+            if (s.startsWith("[")) {
+                // Обработка ответа для Дзен (массив)
                 JSONArray arr = new JSONArray(s);
                 if (arr.length() > 0) {
                     JSONObject j = arr.getJSONObject(0);
-                    if (j.has("documentId")) return new ArticleResult(j.getString("documentId"));
+                    if (channel == ChannelType.SITE) {
+                        // Для Дзен извлекаем данные из поля output
+                        if (j.has("output")) {
+                            JSONObject output = j.getJSONObject("output");
+                            String text = output.optString("text");
+                            String picture = output.optString("picture");
+                            String docId = j.optString("documentId");
+                            ArticleResult result = new ArticleResult(docId);
+                            result.text = text;
+                            result.picture = picture;
+                            return result;
+                        }
+                    }
                 }
-                return null;
             } else {
+                // Обработка ответа для Telegram (объект)
                 JSONObject j = new JSONObject(s);
-                return new ArticleResult(j.optString("text"), j.optString("picture"));
+                if (channel == ChannelType.TG) {
+                    String text = j.optString("text");
+                    String picture = j.optString("picture");
+                    return new ArticleResult(text, picture);
+                }
             }
+            return null;
         } catch (IOException e) {
             e.printStackTrace();
             return null;
@@ -384,15 +412,60 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendToDzen(String documentId) {
-        JSONObject payload = new JSONObject();
-        payload.put("action", "publish");
-        payload.put("documentId", documentId);
-        RequestBody body = RequestBody.create(payload.toString(), MediaType.parse("application/json; charset=utf-8"));
-        Request req = new Request.Builder().url(N8N_WEBHOOK_URL + "zen-publish").post(body).build();
-        try (Response resp = http.newCall(req).execute()) {
-            System.out.println("→ Zen publish response: " + (resp.body() != null ? resp.body().string() : "null"));
-        } catch (IOException e) {
+    private void saveToBaserow(String text, String picture) {
+        try {
+            // Проверка входных данных
+            if (text == null || text.isEmpty()) {
+                System.err.println("Текст статьи пустой, нечего сохранять");
+                return;
+            }
+
+            System.out.println("Попытка сохранить в Baserow:");
+            System.out.println("Текст: " + (text.length() > 50 ? text.substring(0, 50) + "..." : text));
+            System.out.println("Изображение: " + picture);
+
+            JSONObject payload = new JSONObject();
+            payload.put("content", text);
+
+            // Добавляем picture только если оно есть
+            if (picture != null && !picture.isEmpty()) {
+                payload.put("image_url", picture);
+            }
+
+            // Добавляем timestamp в правильном формате
+            String timestamp = Instant.now().toString();
+            payload.put("date_created", timestamp);
+
+            System.out.println("Отправляемые данные: " + payload.toString());
+
+            RequestBody body = RequestBody.create(
+                    payload.toString(),
+                    MediaType.parse("application/json")
+            );
+
+            Request request = new Request.Builder()
+                    .url(BASEROW_API_URL)
+                    .header("Authorization", "Token " + BASEROW_TOKEN)
+                    .header("Content-Type", "application/json")
+                    .post(body)
+                    .build();
+
+            try (Response response = http.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    System.err.println("Ошибка при сохранении в Baserow. Код: " + response.code());
+                    if (response.body() != null) {
+                        String errorBody = response.body().string();
+                        System.err.println("Тело ошибки: " + errorBody);
+                    }
+                } else {
+                    System.out.println("Успешно сохранено в Baserow");
+                    if (response.body() != null) {
+                        System.out.println("Ответ сервера: " + response.body().string());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Критическая ошибка при сохранении в Baserow:");
             e.printStackTrace();
         }
     }
