@@ -20,7 +20,6 @@ import java.io.InputStream;
 import java.net.URL;
 import java.time.Instant;
 import java.util.*;
-import java.util.Base64;
 
 public class TelegramArticleBot extends TelegramLongPollingBot {
     // =============== CONFIG ================
@@ -31,6 +30,8 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
     private static final String GOOGLE_DOCS_URL_PREFIX = "https://docs.google.com/document/d/";
     private static final String BASEROW_API_URL = System.getenv("BASEROW_API_URL");
     private static final String BASEROW_TOKEN = System.getenv("BASEROW_TOKEN");
+    private static final String IMGBB_API_KEY = System.getenv("IMGBB_API_KEY");
+    private static final String IMGBB_UPLOAD_URL = System.getenv("IMGBB_UPLOAD_URL");
     // =======================================
 
     private enum ChannelType { TG, SITE }
@@ -75,18 +76,39 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         mainMenuKeyboard.setKeyboard(rows);
     }
 
-    // Helper method to download image and convert to Base64
-    private String imageToBase64(String imageUrl) throws IOException {
-        if (imageUrl == null || imageUrl.isEmpty()) return null;
-
-        try (InputStream in = new URL(imageUrl).openStream();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
+    private String uploadImageToImgBB(String imageUrl) throws IOException {
+        // 1. Download image
+        Request downloadRequest = new Request.Builder().url(imageUrl).build();
+        byte[] imageBytes;
+        try (Response response = http.newCall(downloadRequest).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("Failed to download image: " + response.code());
             }
-            return Base64.getEncoder().encodeToString(out.toByteArray());
+            imageBytes = response.body().bytes();
+        }
+
+        // 2. Upload to ImgBB
+        RequestBody requestBody = new MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("key", IMGBB_API_KEY)
+                .addFormDataPart("image", "image.jpg",
+                        RequestBody.create(imageBytes, MediaType.parse("image/jpeg")))
+                .build();
+
+        Request uploadRequest = new Request.Builder()
+                .url(IMGBB_UPLOAD_URL)
+                .post(requestBody)
+                .build();
+
+        try (Response response = http.newCall(uploadRequest).execute()) {
+            String jsonResponse = response.body().string();
+            JSONObject json = new JSONObject(jsonResponse);
+
+            if (!json.getBoolean("success")) {
+                throw new IOException("ImgBB API error: " + json.getJSONObject("error").getString("message"));
+            }
+
+            return json.getJSONObject("data").getString("url");
         }
     }
 
@@ -426,10 +448,12 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         }
     }
 
-    private void saveToBaserow(String text, String pictureUrl) {
+    private void saveToBaserow(String text, String imageUrl) {
         try {
+            System.out.println("Начало сохранения в Baserow...");
+
             if (text == null || text.isEmpty()) {
-                System.err.println("Текст статьи пустой, нечего сохранять");
+                System.err.println("Ошибка: Пустой текст статьи");
                 return;
             }
 
@@ -437,17 +461,25 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             payload.put("content", text);
             payload.put("date_created", Instant.now().toString());
 
-            if (pictureUrl != null && !pictureUrl.isEmpty()) {
+            System.out.println("Полученный URL картинки: " + imageUrl);
+
+            if (imageUrl != null && !imageUrl.isEmpty()) {
                 try {
-                    String imageBase64 = imageToBase64(pictureUrl);
-                    payload.put("image_base64", imageBase64);
-                    System.out.println("Изображение конвертировано в Base64");
+                    System.out.println("Загрузка изображения на ImgBB...");
+                    String permanentUrl = uploadImageToImgBB(imageUrl);
+                    System.out.println("Получен постоянный URL: " + permanentUrl);
+                    payload.put("image_url", permanentUrl);
                 } catch (IOException e) {
-                    System.err.println("Ошибка конвертации изображения:");
+                    System.err.println("Ошибка загрузки на ImgBB:");
                     e.printStackTrace();
-                    payload.put("image_url", pictureUrl); // Сохраняем оригинальный URL как fallback
+                    payload.put("image_url", imageUrl); // Fallback - сохраняем оригинальный URL
                 }
+            } else {
+                System.out.println("Картинка отсутствует - пропускаем");
             }
+
+            System.out.println("Отправляемые данные в Baserow:");
+            System.out.println(payload.toString(2));
 
             RequestBody body = RequestBody.create(
                     payload.toString(),
@@ -457,21 +489,26 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             Request request = new Request.Builder()
                     .url(BASEROW_API_URL)
                     .header("Authorization", "Token " + BASEROW_TOKEN)
+                    .header("Content-Type", "application/json")
                     .post(body)
                     .build();
 
             try (Response response = http.newCall(request).execute()) {
+                System.out.println("Ответ Baserow. Код: " + response.code());
+
                 if (!response.isSuccessful()) {
-                    System.err.println("Ошибка при сохранении в Baserow. Код: " + response.code());
+                    System.err.println("Ошибка Baserow!");
                     if (response.body() != null) {
-                        System.err.println("Тело ошибки: " + response.body().string());
+                        String errorBody = response.body().string();
+                        System.err.println("Тело ошибки: " + errorBody);
                     }
                 } else {
-                    System.out.println("Успешно сохранено в Baserow");
+                    String responseBody = response.body() != null ? response.body().string() : "null";
+                    System.out.println("Успешный ответ: " + responseBody);
                 }
             }
         } catch (Exception e) {
-            System.err.println("Критическая ошибка при сохранении в Baserow:");
+            System.err.println("Критическая ошибка:");
             e.printStackTrace();
         }
     }
