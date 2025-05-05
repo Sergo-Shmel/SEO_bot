@@ -14,9 +14,13 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
 import java.time.Instant;
 import java.util.*;
+import java.util.Base64;
 
 public class TelegramArticleBot extends TelegramLongPollingBot {
     // =============== CONFIG ================
@@ -71,6 +75,21 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         mainMenuKeyboard.setKeyboard(rows);
     }
 
+    // Helper method to download image and convert to Base64
+    private String imageToBase64(String imageUrl) throws IOException {
+        if (imageUrl == null || imageUrl.isEmpty()) return null;
+
+        try (InputStream in = new URL(imageUrl).openStream();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            while ((bytesRead = in.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
+            }
+            return Base64.getEncoder().encodeToString(out.toByteArray());
+        }
+    }
+
     private void resetUserState(long chatId) {
         states.remove(chatId);
         lastResults.remove(chatId);
@@ -89,7 +108,6 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         if (upd.hasCallbackQuery()) {
             try {
                 handleCallback(upd.getCallbackQuery());
-                // Удаляем сообщение с inline-кнопкой после обработки
                 DeleteMessage deleteMessage = new DeleteMessage(
                         String.valueOf(upd.getCallbackQuery().getMessage().getChatId()),
                         upd.getCallbackQuery().getMessage().getMessageId()
@@ -275,7 +293,7 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         gen.setCallbackData("ACT_GEN");
         InlineKeyboardButton rew = new InlineKeyboardButton("✍️ Переписать");
         rew.setCallbackData("ACT_REWRITE");
-        String where = (ch == ChannelType.TG) ? "Telegram" : "Сайт";
+        String where = (ch == ChannelType.TG) ? "Telegram" : "Дзен";
         InlineKeyboardMarkup kb = new InlineKeyboardMarkup(
                 Arrays.asList(
                         Collections.singletonList(gen),
@@ -364,14 +382,11 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             System.out.println("← n8n response: " + s);
             if (!resp.isSuccessful() || s == null) return null;
 
-            // Проверяем, является ли ответ массивом или объектом
             if (s.startsWith("[")) {
-                // Обработка ответа для Дзен (массив)
                 JSONArray arr = new JSONArray(s);
                 if (arr.length() > 0) {
                     JSONObject j = arr.getJSONObject(0);
                     if (channel == ChannelType.SITE) {
-                        // Для Дзен извлекаем данные из поля output
                         if (j.has("output")) {
                             JSONObject output = j.getJSONObject("output");
                             String text = output.optString("text");
@@ -385,7 +400,6 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
                     }
                 }
             } else {
-                // Обработка ответа для Telegram (объект)
                 JSONObject j = new JSONObject(s);
                 if (channel == ChannelType.TG) {
                     String text = j.optString("text");
@@ -412,31 +426,28 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         }
     }
 
-    private void saveToBaserow(String text, String picture) {
+    private void saveToBaserow(String text, String pictureUrl) {
         try {
-            // Проверка входных данных
             if (text == null || text.isEmpty()) {
                 System.err.println("Текст статьи пустой, нечего сохранять");
                 return;
             }
 
-            System.out.println("Попытка сохранить в Baserow:");
-            System.out.println("Текст: " + (text.length() > 50 ? text.substring(0, 50) + "..." : text));
-            System.out.println("Изображение: " + picture);
-
             JSONObject payload = new JSONObject();
             payload.put("content", text);
+            payload.put("date_created", Instant.now().toString());
 
-            // Добавляем picture только если оно есть
-            if (picture != null && !picture.isEmpty()) {
-                payload.put("image_url", picture);
+            if (pictureUrl != null && !pictureUrl.isEmpty()) {
+                try {
+                    String imageBase64 = imageToBase64(pictureUrl);
+                    payload.put("image_base64", imageBase64);
+                    System.out.println("Изображение конвертировано в Base64");
+                } catch (IOException e) {
+                    System.err.println("Ошибка конвертации изображения:");
+                    e.printStackTrace();
+                    payload.put("image_url", pictureUrl); // Сохраняем оригинальный URL как fallback
+                }
             }
-
-            // Добавляем timestamp в правильном формате
-            String timestamp = Instant.now().toString();
-            payload.put("date_created", timestamp);
-
-            System.out.println("Отправляемые данные: " + payload.toString());
 
             RequestBody body = RequestBody.create(
                     payload.toString(),
@@ -446,7 +457,6 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
             Request request = new Request.Builder()
                     .url(BASEROW_API_URL)
                     .header("Authorization", "Token " + BASEROW_TOKEN)
-                    .header("Content-Type", "application/json")
                     .post(body)
                     .build();
 
@@ -454,14 +464,10 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
                 if (!response.isSuccessful()) {
                     System.err.println("Ошибка при сохранении в Baserow. Код: " + response.code());
                     if (response.body() != null) {
-                        String errorBody = response.body().string();
-                        System.err.println("Тело ошибки: " + errorBody);
+                        System.err.println("Тело ошибки: " + response.body().string());
                     }
                 } else {
                     System.out.println("Успешно сохранено в Baserow");
-                    if (response.body() != null) {
-                        System.out.println("Ответ сервера: " + response.body().string());
-                    }
                 }
             }
         } catch (Exception e) {
@@ -474,7 +480,6 @@ public class TelegramArticleBot extends TelegramLongPollingBot {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
     }
 
-    // All plain-text replies use this to include the persistent reply-button keyboard
     private void sendText(long chat, String text) {
         SendMessage m = new SendMessage(String.valueOf(chat), text);
         m.setReplyMarkup(mainMenuKeyboard);
